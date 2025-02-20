@@ -1,6 +1,7 @@
 import React from "react";
 import Logo from "../assets/Ha1iad3.png";
 import WalletConnection from "./WalletConnection";
+import SignIn from "./signIn";
 
 export default function Navbar() {
   return (
@@ -16,7 +17,7 @@ export default function Navbar() {
       </a>
       <br />
       <div className="absolute top-0 right-0">
-        <WalletConnection />
+        <SignIn />
       </div>
     </div>
   );
