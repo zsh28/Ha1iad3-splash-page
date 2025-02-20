@@ -4,3 +4,16 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.underline-glow::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 2px;
+  background-color: #0050fb;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  box-shadow: 0 0 8px #0050fb;
+}
+
