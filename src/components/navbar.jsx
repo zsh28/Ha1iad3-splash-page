@@ -1,7 +1,7 @@
 import React from "react";
 import Logo from "../assets/Ha1iad3.png";
 import WalletConnection from "./WalletConnection";
-import SignIn from "./signIn";
+import SignIn from "./SignIn";
 
 export default function Navbar() {
   return (
