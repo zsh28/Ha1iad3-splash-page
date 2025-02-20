@@ -6,7 +6,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      'process.env.VITE_HELIUS_RPC': JSON.stringify(env.VITE_HELIUS_RPC),
+      // for main net
+      // 'process.env.VITE_HELIUS_RPC': JSON.stringify(env.VITE_HELIUS_RPC),
+
+      // for testnet
+      'process.env.VITE_TESTNET_RPC': JSON.stringify(env.VITE_TESTNET_RPC),
+
     },
   };
 }); 

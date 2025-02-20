@@ -9,12 +9,21 @@ import {
   StakeProgram,
   Keypair,
 } from "@solana/web3.js";
-import { DEFAULT_VALIDATOR, DEFAULT_VALIDATOR_VOTE } from "../constants/validators";
+import { DEFAULT_VALIDATOR, DEFAULT_VALIDATOR_VOTE, TESTNET_VALIDATOR, TESTNET_VALIDATOR_VOTE } from "../constants/validators";
+import { toast } from 'react-hot-toast';
+
 
 const RENT_EXEMPTION = 0.002; // SOL
 const TX_FEE = 0.000005; // SOL
 const MIN_STAKE = 0.001; // SOL
 const MIN_TOTAL = RENT_EXEMPTION + TX_FEE + MIN_STAKE;
+
+const getSolscanLink = (signature) => {
+  // testnet
+  return `https://solscan.io/tx/${signature}?cluster=testnet`;
+// for main net
+  // return `https://solscan.io/tx/${signature}/`;
+};
 
 export default function StakingInterface() {
   const { publicKey, signTransaction } = useWallet();
@@ -23,7 +32,11 @@ export default function StakingInterface() {
   const [amount, setAmount] = useState("");
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [validatorVotePubkey] = useState(DEFAULT_VALIDATOR_VOTE);
+  // for main net
+  // const [validatorVotePubkey] = useState(DEFAULT_VALIDATOR_VOTE);
+
+  // for testnet
+  const [validatorVotePubkey] = useState(TESTNET_VALIDATOR_VOTE);
   const [validatorInfo, setValidatorInfo] = useState(null);
 
   useEffect(() => {
@@ -36,12 +49,32 @@ export default function StakingInterface() {
       try {
         const bal = await connection.getBalance(publicKey);
         setBalance((bal / LAMPORTS_PER_SOL).toFixed(5));
+        console.log('Balance updated:', (bal / LAMPORTS_PER_SOL).toFixed(5), 'SOL');
       } catch (error) {
         setBalance(0);
       }
     }
 
+    // get initial balance on connect
     getBalance();
+
+    //set 10 second interval
+    let intervalId;
+    if (publicKey) {
+      console.log('Starting balance polling...');
+      intervalId = setInterval(() => {
+        console.log('Checking balance...');
+        getBalance();
+      }, 10000);
+    }
+
+    // cleanup interval on unmount
+    return () => {
+      if (intervalId) {
+        console.log('Stopping balance polling...');
+        clearInterval(intervalId);
+      }
+    };
   }, [publicKey, connection]);
 
   useEffect(() => {
@@ -49,7 +82,12 @@ export default function StakingInterface() {
       try {
         const voteAccounts = await connection.getVoteAccounts();
         const validator = voteAccounts.current.find(
-          (v) => v.nodePubkey === DEFAULT_VALIDATOR.toString()
+
+          // for testnet
+          (v) => v.nodePubkey === TESTNET_VALIDATOR.toString()
+
+          // for main net
+          // (v) => v.nodePubkey === DEFAULT_VALIDATOR.toString()
         );
 
         if (validator) {
@@ -130,13 +168,33 @@ export default function StakingInterface() {
       connection.sendRawTransaction(signedTx.serialize())
         .then(signature => {
           console.log("Staking transaction signature:", signature);
-          // Optionally update balance after a short delay
-          setTimeout(async () => {
-            const newBalance = await connection.getBalance(publicKey);
-            setBalance(newBalance / LAMPORTS_PER_SOL);
-          }, 2000);
+          
+          toast.success(
+            <div>
+              Transaction sent! View on{' '}
+              <a 
+                href={getSolscanLink(signature)} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="underline text-blue-500"
+              >
+                Solscan
+              </a>
+            </div>,
+            {
+              duration: 10000,
+              style: {
+                minWidth: '300px'
+              }
+            }
+          );
         })
-        .catch(error => console.error("Error sending transaction:", error));
+        .catch(error => {
+          console.error("Error sending transaction:", error);
+          toast.error("Failed to send transaction. Please try again.", {
+            duration: 10000
+          });
+        });
 
       return signedTx;
 
@@ -208,8 +266,13 @@ export default function StakingInterface() {
         </div>
         <div className="flex justify-between">
           <p>Validator:</p>
-          <p className="text-sm truncate" title={DEFAULT_VALIDATOR.toString()}>
+          {/* for main net */}
+          {/* <p className="text-sm truncate" title={DEFAULT_VALIDATOR.toString()}>
             {DEFAULT_VALIDATOR.toString().slice(0, 8)}...
+          </p> */}
+          {/* for testnet */}
+          <p className="text-sm truncate" title={TESTNET_VALIDATOR.toString()}>
+            {TESTNET_VALIDATOR.toString().slice(0, 8)}...
           </p>
         </div>
         <div className="flex justify-between">
@@ -226,10 +289,10 @@ export default function StakingInterface() {
               : ".."}
           </p>
         </div>
-        <div className="flex justify-between">
+        {/* <div className="flex justify-between">
           <p>Rent:</p>
           <p>0.002 SOL</p>
-        </div>
+        </div> */}
         <div className="flex justify-between">
           <p>Unlock period:</p>
           <p>2-3 days</p>

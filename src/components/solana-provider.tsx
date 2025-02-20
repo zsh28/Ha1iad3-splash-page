@@ -21,12 +21,18 @@ import "@solana/wallet-adapter-react-ui/styles.css";
 export const WalletButton = WalletMultiButton;
 
 export default function SolanaProvider({ children }: { children: ReactNode }) {
-  const endpoint =
-    import.meta.env.VITE_HELIUS_RPC || import.meta.env.VITE_QN_RPC_URL;
+  // for main net
+  // const endpoint =
+  //   import.meta.env.VITE_HELIUS_RPC || import.meta.env.VITE_QN_RPC_URL;
+
+  // for testnet
+  const endpoint = import.meta.env.VITE_TESTNET_RPC;
 
   if (!endpoint) {
     throw new Error("RPC environment variable is not set");
   }
+
+  const network = WalletAdapterNetwork.Testnet;
 
   const wallets = useMemo(
     () => [

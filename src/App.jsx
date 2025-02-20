@@ -4,11 +4,13 @@ import Heading from "./components/heading";
 import Body from "./components/body";
 import StakingInterface from "./components/StakingInterface";
 import SolanaProvider from "./components/solana-provider";
+import { Toaster } from 'react-hot-toast';
 
 export default function App() {
   return (
     <SolanaProvider>
       <div className="relative mx-auto min-h-screen bg-[#191a2c] px-4 sm:px-16 items-center text-center overflow-hidden">
+        <Toaster position="bottom-right" />
         {/* Content */}
         <div className="relative z-10 mb-0">
           <Navbar />
