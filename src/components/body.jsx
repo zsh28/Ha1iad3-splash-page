@@ -3,7 +3,7 @@ import React from "react";
 export default function Body() {
   return (
     <div className="py-10 text-white text-lg font-light">
-      <h3 className="pb-10 font-roboto text-[22px] font-normal underline decoration-solid underline-offset-[3px] uppercase transition-colors duration-300">
+      {/* <h3 className="pb-10 font-roboto text-[22px] font-normal underline decoration-solid underline-offset-[3px] uppercase transition-colors duration-300">
         <a
           href="https://turbin3.com/"
           target="_blank"
@@ -11,7 +11,7 @@ export default function Body() {
         >
           Together, we can:
         </a>
-      </h3>
+      </h3> */}
 
       <ul className="space-y-4">
         <li className="flex items-start justify-center">
