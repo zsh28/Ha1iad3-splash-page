@@ -17,16 +17,98 @@ import {
 } from "../constants/validators";
 import { toast } from "react-hot-toast";
 
-const RENT_EXEMPTION = 0.002; // SOL
-const TX_FEE = 0.000005; // SOL
 const MIN_STAKE = 0.001; // SOL
-const MIN_TOTAL = RENT_EXEMPTION + TX_FEE + MIN_STAKE;
+
+// Cache for RPC responses
+const cache = {
+  voteAccounts: null,
+  voteAccountsTimestamp: 0,
+  fees: null,
+  feesTimestamp: 0,
+  CACHE_DURATION: 5 * 60 * 1000, // 5 minutes
+};
 
 const getSolscanLink = (signature) => {
   // testnet
   // return `https://solscan.io/tx/${signature}?cluster=testnet`;
   // for main net
   return `https://solscan.io/tx/${signature}/`;
+};
+
+// Add retry utility with exponential backoff and proper delays
+const withRetry = async (fn, initialDelay = 12000, maxRetries = 3) => {
+  let retries = 0;
+  let delay = initialDelay;
+
+  while (retries < maxRetries) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error.toString().includes("429") && retries < maxRetries - 1) {
+        console.log(`Rate limited. Retrying after ${delay/1000}s delay...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff
+        retries++;
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
+// Sequential request helper
+const sequentialRequests = async (requests) => {
+  const results = [];
+  for (const request of requests) {
+    // Add a small delay between requests
+    if (results.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    results.push(await request());
+  }
+  return results;
+};
+
+const getVoteAccounts = async (connection) => {
+  const now = Date.now();
+  if (cache.voteAccounts && (now - cache.voteAccountsTimestamp) < cache.CACHE_DURATION) {
+    return cache.voteAccounts;
+  }
+  
+  const voteAccounts = await withRetry(() => connection.getVoteAccounts());
+  cache.voteAccounts = voteAccounts;
+  cache.voteAccountsTimestamp = now;
+  return voteAccounts;
+};
+
+const estimateStakeFees = async (connection) => {
+  const now = Date.now();
+  if (cache.fees && (now - cache.feesTimestamp) < cache.CACHE_DURATION) {
+    return cache.fees;
+  }
+
+  const [rentExemption, recentBlockhash] = await sequentialRequests([
+    () => withRetry(() => connection.getMinimumBalanceForRentExemption(StakeProgram.space)),
+    () => withRetry(() => connection.getLatestBlockhash()),
+  ]);
+  
+  const fees = {
+    rentExemption: rentExemption / LAMPORTS_PER_SOL,
+    txFee: recentBlockhash.feeCalculator?.lamportsPerSignature 
+      ? (recentBlockhash.feeCalculator.lamportsPerSignature * 2) / LAMPORTS_PER_SOL
+      : 0.000005
+  };
+
+  cache.fees = fees;
+  cache.feesTimestamp = now;
+  return fees;
+};
+
+const estimateUnstakeWithdrawFee = async (connection) => {
+  const { feeCalculator } = await withRetry(() => connection.getLatestBlockhash());
+  return feeCalculator?.lamportsPerSignature 
+    ? feeCalculator.lamportsPerSignature / LAMPORTS_PER_SOL
+    : 0.000005;
 };
 
 export default function StakingInterface() {
@@ -47,6 +129,11 @@ export default function StakingInterface() {
   const [unstakingAccount, setUnstakingAccount] = useState(null);
   const [withdrawingAccount, setWithdrawingAccount] = useState(null);
 
+  // Add new state for fees
+  const [stakingFees, setStakingFees] = useState({ rentExemption: 0.002, txFee: 0.000005 });
+  const [unstakeFee, setUnstakeFee] = useState(0.000005);
+
+  // Update balance fetching to use retry logic
   useEffect(() => {
     async function getBalance() {
       if (!publicKey) {
@@ -55,75 +142,38 @@ export default function StakingInterface() {
       }
 
       try {
-        const bal = await connection.getBalance(publicKey);
+        const bal = await withRetry(() => connection.getBalance(publicKey));
         setBalance((bal / LAMPORTS_PER_SOL).toFixed(5));
-        console.log(
-          "Balance updated:",
-          (bal / LAMPORTS_PER_SOL).toFixed(5),
-          "SOL"
-        );
       } catch (error) {
-        setBalance(0);
+        console.error("Error fetching balance:", error);
+        // Don't set balance to 0 on error, keep previous value
       }
     }
 
-    // get initial balance on connect
     getBalance();
-
-    //set 60 second interval so we don't exhaust the free rpc
+    
     let intervalId;
     if (publicKey) {
-      console.log("Starting balance polling...");
-      intervalId = setInterval(() => {
-        console.log("Checking balance...");
-        getBalance();
-      }, 60000);
+      // Increase interval to 2 minutes
+      intervalId = setInterval(getBalance, 120000);
     }
 
-    // cleanup interval on unmount
     return () => {
-      if (intervalId) {
-        console.log("Stopping balance polling...");
-        clearInterval(intervalId);
-      }
+      if (intervalId) clearInterval(intervalId);
     };
   }, [publicKey, connection]);
 
-  useEffect(() => {
-    async function fetchValidatorInfo() {
-      try {
-        const voteAccounts = await connection.getVoteAccounts();
-        const validator = voteAccounts.current.find(
-          // for testnet
-          // (v) => v.nodePubkey === TESTNET_VALIDATOR.toString()
-
-          // for main net
-          (v) => v.nodePubkey === MAINNET_VALIDATOR_ID.toString()
-        );
-
-        if (validator) {
-          setValidatorInfo({
-            commission: validator.commission,
-            activatedStake: validator.activatedStake / LAMPORTS_PER_SOL,
-            epochCredits: validator.epochCredits,
-          });
-        }
-      } catch (error) {
-        console.error("Error fetching validator info:", error);
-      }
-    }
-
-    fetchValidatorInfo();
-  }, []);
-
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
+  // Update stake accounts fetching to use sequential requests
   const fetchStakeAccounts = useCallback(async () => {
     if (!publicKey || !connection) return;
 
     try {
-      const [accounts, epochInfo] = await Promise.all([
-        connection.getParsedProgramAccounts(
+      // Get vote accounts first since they're cached
+      const voteAccounts = await getVoteAccounts(connection);
+      
+      // Then fetch other data sequentially
+      const [accounts, epochInfo] = await sequentialRequests([
+        () => withRetry(() => connection.getParsedProgramAccounts(
           StakeProgram.programId,
           {
             filters: [
@@ -135,56 +185,62 @@ export default function StakingInterface() {
               },
             ],
           }
-        ),
-        connection.getEpochInfo(),
+        )),
+        () => withRetry(() => connection.getEpochInfo()),
       ]);
 
-      const stakeAccountsInfo = await Promise.all(
-        accounts.map(async (account) => {
-          const stakeAccount = account.account;
-          const stakeState = stakeAccount.data.parsed.type;
-          const delegation = stakeAccount.data.parsed.info.stake?.delegation;
-          const delegatedVoteAccount = delegation?.voter;
-          
-          let validatorName = "Unknown Validator";
-          if (delegatedVoteAccount) {
-            try {
-              const voteAccounts = await connection.getVoteAccounts();
-              const validator = voteAccounts.current.find(
-                (v) => v.votePubkey === delegatedVoteAccount
-              );
-              if (validator) {
-                validatorName = validator.nodePubkey.slice(0, 8) + "...";
-              }
-            } catch (error) {
-              console.error("Error fetching validator info:", error);
-            }
-          }
-
-          // Determine the actual state based on delegation and epochs
-          let actualState = stakeState;
-          if (stakeState === "delegated" && delegation) {
-            if (delegation.deactivationEpoch !== "18446744073709551615") { // max u64 value means not deactivated
-              if (epochInfo.epoch >= delegation.deactivationEpoch) {
-                actualState = "inactive";
-              } else {
-                actualState = "deactivating";
-              }
-            }
-          }
-
-          return {
-            pubkey: account.pubkey,
-            lamports: stakeAccount.lamports,
-            state: actualState,
-            delegatedVoteAccount,
-            validatorName,
-            activation: delegation?.activationEpoch,
-            deactivation: delegation?.deactivationEpoch,
-            currentEpoch: epochInfo.epoch,
-          };
-        })
+      // Update validator info from cached vote accounts
+      const validator = voteAccounts.current.find(
+        (v) => v.nodePubkey === MAINNET_VALIDATOR_ID.toString()
       );
+
+      if (validator) {
+        setValidatorInfo({
+          commission: validator.commission,
+          activatedStake: validator.activatedStake / LAMPORTS_PER_SOL,
+          epochCredits: validator.epochCredits,
+        });
+      }
+
+      const stakeAccountsInfo = accounts.map((account) => {
+        const stakeAccount = account.account;
+        const stakeState = stakeAccount.data.parsed.type;
+        const delegation = stakeAccount.data.parsed.info.stake?.delegation;
+        const delegatedVoteAccount = delegation?.voter;
+        
+        let validatorName = "Unknown Validator";
+        if (delegatedVoteAccount) {
+          const validator = voteAccounts.current.find(
+            (v) => v.votePubkey === delegatedVoteAccount
+          );
+          if (validator) {
+            validatorName = validator.nodePubkey.slice(0, 8) + "...";
+          }
+        }
+
+        // Determine the actual state based on delegation and epochs
+        let actualState = stakeState;
+        if (stakeState === "delegated" && delegation) {
+          if (delegation.deactivationEpoch !== "18446744073709551615") {
+            if (epochInfo.epoch >= delegation.deactivationEpoch) {
+              actualState = "inactive";
+            } else {
+              actualState = "deactivating";
+            }
+          }
+        }
+
+        return {
+          pubkey: account.pubkey,
+          lamports: stakeAccount.lamports,
+          state: actualState,
+          delegatedVoteAccount,
+          validatorName,
+          activation: delegation?.activationEpoch,
+          deactivation: delegation?.deactivationEpoch,
+          currentEpoch: epochInfo.epoch,
+        };
+      });
 
       setActiveStakes(stakeAccountsInfo);
     } catch (error) {
@@ -193,14 +249,47 @@ export default function StakingInterface() {
     }
   }, [publicKey, connection]);
 
+  // Update polling intervals
   useEffect(() => {
     if (publicKey) {
       fetchStakeAccounts();
-      // Refresh every 60 seconds
-      const intervalId = setInterval(fetchStakeAccounts, 60000);
+      // Increase interval to 2 minutes
+      const intervalId = setInterval(fetchStakeAccounts, 120000);
       return () => clearInterval(intervalId);
     }
   }, [publicKey, fetchStakeAccounts]);
+
+  // Update fee fetching to use longer interval
+  useEffect(() => {
+    if (connection) {
+      let isSubscribed = true;
+      
+      const updateFees = async () => {
+        try {
+          const [stakeFees, unstakeWithdrawFee] = await sequentialRequests([
+            () => estimateStakeFees(connection),
+            () => estimateUnstakeWithdrawFee(connection)
+          ]);
+          
+          if (isSubscribed) {
+            setStakingFees(stakeFees);
+            setUnstakeFee(unstakeWithdrawFee);
+          }
+        } catch (error) {
+          console.error("Failed to update fees:", error);
+        }
+      };
+      
+      updateFees();
+      // Update fees every 15 minutes
+      const intervalId = setInterval(updateFees, 900000);
+      
+      return () => {
+        isSubscribed = false;
+        clearInterval(intervalId);
+      };
+    }
+  }, [connection]);
 
   const handleUnstake = useCallback(async (stakePubkey) => {
     if (!publicKey || !connection || !signTransaction) return;
@@ -495,6 +584,7 @@ export default function StakingInterface() {
       return signedTx;
     } catch (error) {
       console.error("Error staking SOL:", error);
+      toast.error("Error staking SOL, check block explorer.");
     } finally {
       setLoading(false);
     }
@@ -564,7 +654,7 @@ export default function StakingInterface() {
                 </button>
                 <button
                   onClick={() => {
-                    const maxAmount = balance - RENT_EXEMPTION - TX_FEE;
+                    const maxAmount = balance - stakingFees.rentExemption - stakingFees.txFee;
                     setAmount(Math.max(0, maxAmount).toFixed(5));
                   }}
                   className="px-2 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600"
@@ -620,7 +710,8 @@ export default function StakingInterface() {
             className={`w-full p-2 rounded ${
               loading
                 ? "bg-gray-500"
-                : balance < MIN_TOTAL || (amount && parseFloat(amount) < MIN_STAKE)
+                : balance < (stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE) ||
+                  (amount && parseFloat(amount) < MIN_STAKE)
                 ? "bg-[#9BEDFF] text-black"
                 : !publicKey || !amount || parseFloat(amount) > balance
                 ? "bg-gray-500"
@@ -632,16 +723,16 @@ export default function StakingInterface() {
               !amount ||
               parseFloat(amount) > balance ||
               parseFloat(amount) < MIN_STAKE ||
-              balance < MIN_TOTAL ||
+              balance < (stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE) ||
               loading
             }
           >
             {loading ? (
               "Staking..."
-            ) : balance < MIN_TOTAL ? (
+            ) : balance < (stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE) ? (
               <>
                 <div>Minimum stake amount is {MIN_STAKE} SOL</div>
-                <div>Minimum balance needed to stake is {MIN_TOTAL} SOL</div>
+                <div>Minimum balance needed to stake is {stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE} SOL</div>
               </>
             ) : parseFloat(amount) < MIN_STAKE ? (
               <div>Minimum stake amount is {MIN_STAKE} SOL</div>
