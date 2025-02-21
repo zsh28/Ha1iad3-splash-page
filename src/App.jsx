@@ -9,8 +9,8 @@ import { Toaster } from 'react-hot-toast';
 export default function App() {
   return (
     <SolanaProvider>
+      <Toaster position="bottom-right" />
       <div className="relative mx-auto min-h-screen bg-[#191a2c] px-4 sm:px-16 items-center text-center overflow-hidden">
-        <Toaster position="bottom-right" />
         {/* Content */}
         <div className="relative z-10 mb-0">
           <Navbar />
@@ -19,7 +19,7 @@ export default function App() {
             <Body />
           </div>
         </div>
-        <div className="transform scale-125 origin-top -mt-11">
+        <div className="transform scale-110 origin-top -mt-11">
           <StakingInterface />
         </div>
 

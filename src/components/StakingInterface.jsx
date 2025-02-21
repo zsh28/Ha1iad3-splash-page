@@ -42,6 +42,9 @@ export default function StakingInterface() {
   // for testnet
   // const [validatorVotePubkey] = useState(TESTNET_VALIDATOR_VOTE);
   const [validatorInfo, setValidatorInfo] = useState(null);
+  const [activeStakes, setActiveStakes] = useState([]);
+  const [showManageStake, setShowManageStake] = useState(false);
+  const [unstakingAccount, setUnstakingAccount] = useState(null);
 
   useEffect(() => {
     async function getBalance() {
@@ -66,14 +69,14 @@ export default function StakingInterface() {
     // get initial balance on connect
     getBalance();
 
-    //set 10 second interval
+    //set 60 second interval so we don't exhaust the free rpc
     let intervalId;
     if (publicKey) {
       console.log("Starting balance polling...");
       intervalId = setInterval(() => {
         console.log("Checking balance...");
         getBalance();
-      }, 10000);
+      }, 60000);
     }
 
     // cleanup interval on unmount
@@ -111,6 +114,172 @@ export default function StakingInterface() {
 
     fetchValidatorInfo();
   }, []);
+
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const fetchStakeAccounts = useCallback(async () => {
+    if (!publicKey || !connection) return;
+
+    try {
+      const accounts = await connection.getParsedProgramAccounts(
+        StakeProgram.programId,
+        {
+          filters: [
+            {
+              memcmp: {
+                offset: 44,
+                bytes: publicKey.toBase58(),
+              },
+            },
+          ],
+        }
+      );
+
+      const stakeAccountsInfo = await Promise.all(
+        accounts.map(async (account) => {
+          const stakeAccount = account.account;
+          const stakeState = stakeAccount.data.parsed.type;
+          const delegatedVoteAccount = stakeAccount.data.parsed.info.stake?.delegation.voter;
+          
+          let validatorName = "Unknown Validator";
+          if (delegatedVoteAccount) {
+            try {
+              const voteAccounts = await connection.getVoteAccounts();
+              const validator = voteAccounts.current.find(
+                (v) => v.votePubkey === delegatedVoteAccount
+              );
+              if (validator) {
+                validatorName = validator.nodePubkey.slice(0, 8) + "...";
+              }
+            } catch (error) {
+              console.error("Error fetching validator info:", error);
+            }
+          }
+
+          return {
+            pubkey: account.pubkey,
+            lamports: stakeAccount.lamports,
+            state: stakeState,
+            delegatedVoteAccount,
+            validatorName,
+            activation: stakeAccount.data.parsed.info.stake?.delegation.activationEpoch,
+            deactivation: stakeAccount.data.parsed.info.stake?.delegation.deactivationEpoch,
+          };
+        })
+      );
+
+      setActiveStakes(stakeAccountsInfo);
+    } catch (error) {
+      console.error("Error fetching stake accounts:", error);
+      toast.error("Failed to fetch stake accounts");
+    }
+  }, [publicKey, connection]);
+
+  useEffect(() => {
+    if (publicKey) {
+      fetchStakeAccounts();
+    }
+  }, [publicKey, fetchStakeAccounts]);
+
+  const handleUnstake = useCallback(async (stakePubkey) => {
+    if (!publicKey || !connection || !signTransaction) return;
+
+    try {
+      setUnstakingAccount(stakePubkey);
+      const transaction = new Transaction();
+      
+      const deactivateIx = StakeProgram.deactivate({
+        stakePubkey: new PublicKey(stakePubkey),
+        authorizedPubkey: publicKey,
+      });
+
+      transaction.add(deactivateIx);
+      
+      const latestBlockhash = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = latestBlockhash.blockhash;
+      transaction.feePayer = publicKey;
+
+      const signedTx = await signTransaction(transaction);
+
+      const signature = await connection.sendRawTransaction(signedTx.serialize());
+      
+      toast.success(
+        <div>
+          Unstaking initiated! View on{" "}
+          <a
+            href={getSolscanLink(signature)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-blue-500"
+          >
+            Solscan
+          </a>
+        </div>,
+        {
+          duration: 10000,
+        }
+      );
+
+      // Refresh stake accounts after unstaking
+      await fetchStakeAccounts();
+    } catch (error) {
+      console.error("Error unstaking:", error);
+      toast.error("Failed to unstake. Please try again.");
+    } finally {
+      setUnstakingAccount(null);
+    }
+  }, [publicKey, connection, signTransaction]);
+
+  const renderStakeAccounts = () => {
+    if (!activeStakes.length) {
+      return (
+        <div className="text-center text-gray-400 py-4">
+          No active stakes found
+        </div>
+      );
+    }
+
+    return activeStakes.map((stake) => (
+      <div
+        key={stake.pubkey}
+        className="bg-gray-800 p-4 rounded-lg mb-4 flex justify-between items-center"
+      >
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Validator:</span>
+            <span className="text-sm text-gray-300">{stake.validatorName}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Amount:</span>
+            <span className="text-sm text-gray-300">
+              {(stake.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Status:</span>
+            <span className="text-sm text-gray-300">{stake.state}</span>
+          </div>
+        </div>
+        <button
+          className={`px-4 py-2 rounded ${
+            stake.state === "delegated"
+              ? "bg-red-500 hover:bg-red-600"
+              : "bg-gray-600 cursor-not-allowed"
+          }`}
+          onClick={() => handleUnstake(stake.pubkey)}
+          disabled={stake.state !== "delegated" || unstakingAccount === stake.pubkey}
+        >
+          {unstakingAccount === stake.pubkey ? (
+            "Unstaking..."
+          ) : stake.state === "delegated" ? (
+            "Unstake"
+          ) : (
+            "Unavailable"
+          )}
+        </button>
+      </div>
+    ));
+  };
 
   const handleStake = useCallback(async () => {
     if (!publicKey || !connection) {
@@ -216,129 +385,153 @@ export default function StakingInterface() {
     <div className="bg-[#191a2c] text-white p-6 rounded-lg max-w-md mx-auto">
       <div className="flex justify-between mb-4">
         <button
-          className={`p-2 relative ${
-            stakeType === "native" ? "underline-glow" : ""
-          }`}
-          onClick={() => setStakeType("native")}
+          className={`p-2 relative ${!showManageStake ? "underline-glow" : ""}`}
+          onClick={() => setShowManageStake(false)}
         >
-          Native Staking
+          Stake
         </button>
         <button
-          className={`p-2 relative ${
-            stakeType === "liquid" ? "underline-glow" : ""
-          }`}
-          onClick={() => setStakeType("liquid")}
-          disabled
+          className={`p-2 relative ${showManageStake ? "underline-glow" : ""}`}
+          onClick={() => setShowManageStake(true)}
         >
-          Liquid Staking (Coming Soon!)
+          Manage Stakes
         </button>
       </div>
 
-      <div className="mb-4">
-        <label className="block mb-2">Amount</label>
-        <div className="relative">
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-full p-2 bg-gray-800 rounded"
-            placeholder="0 SOL"
-          />
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
+      {showManageStake ? (
+        <div>
+          <h2 className="text-xl font-semibold mb-4">Your Active Stakes</h2>
+          {renderStakeAccounts()}
+        </div>
+      ) : (
+        <>
+          <div className="flex justify-between mb-4">
             <button
-              onClick={() => setAmount((balance / 2).toFixed(5))}
-              className="px-2 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600"
-              disabled={!balance}
+              className={`p-2 relative ${
+                stakeType === "native" ? "underline-glow" : ""
+              }`}
+              onClick={() => setStakeType("native")}
             >
-              HALF
+              Native Staking
             </button>
             <button
-              onClick={() => {
-                const maxAmount = balance - RENT_EXEMPTION - TX_FEE;
-                setAmount(Math.max(0, maxAmount).toFixed(5));
-              }}
-              className="px-2 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600"
-              disabled={!balance}
+              className={`p-2 relative ${
+                stakeType === "liquid" ? "underline-glow" : ""
+              }`}
+              onClick={() => setStakeType("liquid")}
+              disabled
             >
-              MAX
+              Liquid Staking (Coming Soon!)
             </button>
           </div>
-        </div>
-      </div>
 
-      <div className="mb-4">
-        <div className="flex justify-between">
-          <p>Balance:</p>
-          <p>{balance ? `${balance} SOL` : "0 SOL"}</p>
-        </div>
-        <div className="flex justify-between">
-          <p>Validator:</p>
-          {/* for main net */}
-          <p className="text-sm truncate" title={MAINNET_VALIDATOR_ID.toString()}>
-            {MAINNET_VALIDATOR_ID.toString().slice(0, 8)}...
-          </p>
-          {/* for testnet */}
-          {/* <p className="text-sm truncate" title={TESTNET_VALIDATOR.toString()}>
-            {TESTNET_VALIDATOR.toString().slice(0, 8)}...
-          </p> */}
-        </div>
-        <div className="flex justify-between">
-          <p>Commission:</p>
-          <p>{validatorInfo?.commission ?? ".."}%</p>
-        </div>
-        <div className="flex justify-between">
-          <p>Total Stake:</p>
-          <p>
-            {validatorInfo
-              ? `${Math.floor(
-                  validatorInfo.activatedStake
-                ).toLocaleString()} SOL`
-              : ".."}
-          </p>
-        </div>
-        {/* <div className="flex justify-between">
-          <p>Rent:</p>
-          <p>0.002 SOL</p>
-        </div> */}
-        <div className="flex justify-between">
-          <p>Unlock period:</p>
-          <p>2-3 days</p>
-        </div>
-      </div>
+          <div className="mb-4">
+            <label className="block mb-2">Amount</label>
+            <div className="relative">
+              <input
+                type="number"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-full p-2 bg-gray-800 rounded"
+                placeholder="0 SOL"
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
+                <button
+                  onClick={() => setAmount((balance / 2).toFixed(5))}
+                  className="px-2 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600"
+                  disabled={!balance}
+                >
+                  HALF
+                </button>
+                <button
+                  onClick={() => {
+                    const maxAmount = balance - RENT_EXEMPTION - TX_FEE;
+                    setAmount(Math.max(0, maxAmount).toFixed(5));
+                  }}
+                  className="px-2 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600"
+                  disabled={!balance}
+                >
+                  MAX
+                </button>
+              </div>
+            </div>
+          </div>
 
-      <button
-        className={`w-full p-2 rounded ${
-          loading
-            ? "bg-gray-500"
-            : balance < MIN_TOTAL || (amount && parseFloat(amount) < MIN_STAKE)
-            ? "bg-[#9BEDFF] text-black"
-            : !publicKey || !amount || parseFloat(amount) > balance
-            ? "bg-gray-500"
-            : "bg-[#0050fb]"
-        }`}
-        onClick={handleStake}
-        disabled={
-          !publicKey ||
-          !amount ||
-          parseFloat(amount) > balance ||
-          parseFloat(amount) < MIN_STAKE ||
-          balance < MIN_TOTAL ||
-          loading
-        }
-      >
-        {loading ? (
-          "Staking..."
-        ) : balance < MIN_TOTAL ? (
-          <>
-            <div>Minimum stake amount is {MIN_STAKE} SOL</div>
-            <div>Minimum balance needed to stake is {MIN_TOTAL} SOL</div>
-          </>
-        ) : parseFloat(amount) < MIN_STAKE ? (
-          <div>Minimum stake amount is {MIN_STAKE} SOL</div>
-        ) : (
-          "Stake SOL"
-        )}
-      </button>
+          <div className="mb-4">
+            <div className="flex justify-between">
+              <p>Balance:</p>
+              <p>{balance ? `${balance} SOL` : "0 SOL"}</p>
+            </div>
+            <div className="flex justify-between">
+              <p>Validator:</p>
+              {/* for main net */}
+              <p className="text-sm truncate" title={MAINNET_VALIDATOR_ID.toString()}>
+                {MAINNET_VALIDATOR_ID.toString().slice(0, 8)}...
+              </p>
+              {/* for testnet */}
+              {/* <p className="text-sm truncate" title={TESTNET_VALIDATOR.toString()}>
+                {TESTNET_VALIDATOR.toString().slice(0, 8)}...
+              </p> */}
+            </div>
+            <div className="flex justify-between">
+              <p>Commission:</p>
+              <p>{validatorInfo?.commission ?? ".."}%</p>
+            </div>
+            <div className="flex justify-between">
+              <p>Total Stake:</p>
+              <p>
+                {validatorInfo
+                  ? `${Math.floor(
+                      validatorInfo.activatedStake
+                    ).toLocaleString()} SOL`
+                  : ".."}
+              </p>
+            </div>
+            {/* <div className="flex justify-between">
+              <p>Rent:</p>
+              <p>0.002 SOL</p>
+            </div> */}
+            <div className="flex justify-between">
+              <p>Unlock period:</p>
+              <p>2-3 days</p>
+            </div>
+          </div>
+
+          <button
+            className={`w-full p-2 rounded ${
+              loading
+                ? "bg-gray-500"
+                : balance < MIN_TOTAL || (amount && parseFloat(amount) < MIN_STAKE)
+                ? "bg-[#9BEDFF] text-black"
+                : !publicKey || !amount || parseFloat(amount) > balance
+                ? "bg-gray-500"
+                : "bg-[#0050fb]"
+            }`}
+            onClick={handleStake}
+            disabled={
+              !publicKey ||
+              !amount ||
+              parseFloat(amount) > balance ||
+              parseFloat(amount) < MIN_STAKE ||
+              balance < MIN_TOTAL ||
+              loading
+            }
+          >
+            {loading ? (
+              "Staking..."
+            ) : balance < MIN_TOTAL ? (
+              <>
+                <div>Minimum stake amount is {MIN_STAKE} SOL</div>
+                <div>Minimum balance needed to stake is {MIN_TOTAL} SOL</div>
+              </>
+            ) : parseFloat(amount) < MIN_STAKE ? (
+              <div>Minimum stake amount is {MIN_STAKE} SOL</div>
+            ) : (
+              "Stake SOL"
+            )}
+          </button>
+        </>
+      )}
     </div>
   );
 }

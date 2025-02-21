@@ -21,12 +21,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
 export const WalletButton = WalletMultiButton;
 
 export default function SolanaProvider({ children }: { children: ReactNode }) {
-  // Use private RPC for development, public RPC for production
-  // const endpoint = import.meta.env.NODE_ENV === 'production'
-  //   ? import.meta.env.VITE_HELIUS_RPC  // Public RPC for production
-  //   : import.meta.env.VITE_MAINNET_TURBIN3_RPC;  // Private RPC for development
   const endpoint = import.meta.env.VITE_HELIUS_RPC;
-
   const network = WalletAdapterNetwork.Mainnet;
 
   // for testnet
