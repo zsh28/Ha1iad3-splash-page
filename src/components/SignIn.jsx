@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AuthLayout, OAuthMethod, ParaModal, ExternalWallet } from "@getpara/react-sdk";
 import para from "../clients/para";
 import "@getpara/react-sdk/styles.css";
+import Ha1iad3 from "../assets/Ha1iad3.png";
 
 export default function SignIn() {
   const [isOpen, setIsOpen] = useState(false);
@@ -73,6 +74,7 @@ export default function SignIn() {
           borderRadius: "md",
           mode: "dark",
         }}
+        logo={Ha1iad3}
         authLayout={[AuthLayout.AUTH_FULL, AuthLayout.EXTERNAL_FULL]}
         externalWallets={[ExternalWallet.PHANTOM, ExternalWallet.BACKPACK, ExternalWallet.GLOW]}
         oAuthMethods={[OAuthMethod.APPLE, OAuthMethod.GOOGLE, OAuthMethod.TWITTER]}
