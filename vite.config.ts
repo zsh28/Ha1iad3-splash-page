@@ -11,7 +11,8 @@ export default defineConfig(({ mode }) => {
     ],
     define: {
       'process.env.VITE_HELIUS_RPC': JSON.stringify(env.VITE_HELIUS_RPC),
-      'process.env.VITE_PUBLIC_PARA_API_KEY': JSON.stringify(env.VITE_PUBLIC_PARA_API_KEY),
+      'process.env.VITE_PARA_API_KEY': JSON.stringify(env.VITE_PARA_API_KEY),
+
       "process.browser": true
     },
   };

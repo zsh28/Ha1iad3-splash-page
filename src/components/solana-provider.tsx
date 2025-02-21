@@ -1,59 +1,53 @@
-import { WalletError, WalletAdapterNetwork } from "@solana/wallet-adapter-base";
+import React, { createContext, useContext, useState } from "react";
 import {
-  ConnectionProvider,
-  WalletProvider,
-} from "@solana/wallet-adapter-react";
-import {
-  WalletModalProvider,
-  WalletMultiButton,
-} from "@solana/wallet-adapter-react-ui";
-import { ReactNode, useCallback, useMemo } from "react";
-import React from "react";
-import {
-  KeystoneWalletAdapter,
-  LedgerWalletAdapter,
-  PhantomWalletAdapter,
-  SolflareWalletAdapter,
-  TrezorWalletAdapter,
-} from "@solana/wallet-adapter-wallets";
-import "@solana/wallet-adapter-react-ui/styles.css";
+  ParaSolanaProvider,
+  phantomWallet,
+  backpackWallet,
+  glowWallet,
+} from "@getpara/solana-wallet-connectors";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { WalletAdapterNetwork } from "@solana/wallet-adapter-base";
 
-export const WalletButton = WalletMultiButton;
+const SolanaContext = createContext({
+  openModal: () => {},
+  closeModal: () => {},
+  isOpen: false,
+});
 
-export default function SolanaProvider({ children }: { children: ReactNode }) {
+export const useSolanaModal = () => useContext(SolanaContext);
+
+export default function SolanaProvider({ children }: { children: React.ReactNode }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const queryClient = new QueryClient();
+
+  const openModal = () => setIsOpen(true);
+  const closeModal = () => setIsOpen(false);
+
+  const solanaNetwork = WalletAdapterNetwork.Devnet;
+
+  // Use the environment variables for RPC
   const endpoint =
     import.meta.env.VITE_HELIUS_RPC || import.meta.env.VITE_QN_RPC_URL;
 
   if (!endpoint) {
-    throw new Error("RPC environment variable is not set");
+    throw new Error("RPC environment variable is not set. Ensure VITE_HELIUS_RPC or VITE_QN_RPC_URL is defined.");
   }
 
-  const wallets = useMemo(
-    () => [
-      new PhantomWalletAdapter(),
-      new SolflareWalletAdapter(),
-      new LedgerWalletAdapter(),
-      new TrezorWalletAdapter(),
-      new KeystoneWalletAdapter(),
-    ],
-    []
-  );
-
-  const onError = useCallback((error: WalletError) => {
-    console.error(error);
-  }, []);
-
   return (
-    <ConnectionProvider
-      endpoint={endpoint}
-      config={{
-        commitment: "confirmed",
-        confirmTransactionInitialTimeout: 60000,
-      }}
-    >
-      <WalletProvider wallets={wallets} onError={onError} autoConnect={true}>
-        <WalletModalProvider>{children}</WalletModalProvider>
-      </WalletProvider>
-    </ConnectionProvider>
+    <SolanaContext.Provider value={{ openModal, closeModal, isOpen }}>
+      <QueryClientProvider client={queryClient}>
+        <ParaSolanaProvider
+          endpoint={endpoint}
+          wallets={[phantomWallet, backpackWallet, glowWallet]}
+          chain={solanaNetwork}
+          appIdentity={{
+            name: "ha1iad3",
+            uri: `${location.protocol}//${location.host}`,
+          }}
+        >
+          {children}
+        </ParaSolanaProvider>
+      </QueryClientProvider>
+    </SolanaContext.Provider>
   );
 }
