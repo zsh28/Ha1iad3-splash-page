@@ -45,6 +45,7 @@ export default function StakingInterface() {
   const [activeStakes, setActiveStakes] = useState([]);
   const [showManageStake, setShowManageStake] = useState(false);
   const [unstakingAccount, setUnstakingAccount] = useState(null);
+  const [withdrawingAccount, setWithdrawingAccount] = useState(null);
 
   useEffect(() => {
     async function getBalance() {
@@ -121,25 +122,29 @@ export default function StakingInterface() {
     if (!publicKey || !connection) return;
 
     try {
-      const accounts = await connection.getParsedProgramAccounts(
-        StakeProgram.programId,
-        {
-          filters: [
-            {
-              memcmp: {
-                offset: 44,
-                bytes: publicKey.toBase58(),
+      const [accounts, epochInfo] = await Promise.all([
+        connection.getParsedProgramAccounts(
+          StakeProgram.programId,
+          {
+            filters: [
+              {
+                memcmp: {
+                  offset: 44,
+                  bytes: publicKey.toBase58(),
+                },
               },
-            },
-          ],
-        }
-      );
+            ],
+          }
+        ),
+        connection.getEpochInfo(),
+      ]);
 
       const stakeAccountsInfo = await Promise.all(
         accounts.map(async (account) => {
           const stakeAccount = account.account;
           const stakeState = stakeAccount.data.parsed.type;
-          const delegatedVoteAccount = stakeAccount.data.parsed.info.stake?.delegation.voter;
+          const delegation = stakeAccount.data.parsed.info.stake?.delegation;
+          const delegatedVoteAccount = delegation?.voter;
           
           let validatorName = "Unknown Validator";
           if (delegatedVoteAccount) {
@@ -156,14 +161,27 @@ export default function StakingInterface() {
             }
           }
 
+          // Determine the actual state based on delegation and epochs
+          let actualState = stakeState;
+          if (stakeState === "delegated" && delegation) {
+            if (delegation.deactivationEpoch !== "18446744073709551615") { // max u64 value means not deactivated
+              if (epochInfo.epoch >= delegation.deactivationEpoch) {
+                actualState = "inactive";
+              } else {
+                actualState = "deactivating";
+              }
+            }
+          }
+
           return {
             pubkey: account.pubkey,
             lamports: stakeAccount.lamports,
-            state: stakeState,
+            state: actualState,
             delegatedVoteAccount,
             validatorName,
-            activation: stakeAccount.data.parsed.info.stake?.delegation.activationEpoch,
-            deactivation: stakeAccount.data.parsed.info.stake?.delegation.deactivationEpoch,
+            activation: delegation?.activationEpoch,
+            deactivation: delegation?.deactivationEpoch,
+            currentEpoch: epochInfo.epoch,
           };
         })
       );
@@ -178,6 +196,9 @@ export default function StakingInterface() {
   useEffect(() => {
     if (publicKey) {
       fetchStakeAccounts();
+      // Refresh every 60 seconds
+      const intervalId = setInterval(fetchStakeAccounts, 60000);
+      return () => clearInterval(intervalId);
     }
   }, [publicKey, fetchStakeAccounts]);
 
@@ -230,6 +251,62 @@ export default function StakingInterface() {
     }
   }, [publicKey, connection, signTransaction]);
 
+  const handleWithdraw = useCallback(async (stakePubkey) => {
+    if (!publicKey || !connection || !signTransaction) return;
+
+    try {
+      setWithdrawingAccount(stakePubkey);
+      const transaction = new Transaction();
+      
+      // Get the stake account balance
+      const stakeAccount = await connection.getAccountInfo(new PublicKey(stakePubkey));
+      if (!stakeAccount) {
+        throw new Error("Stake account not found");
+      }
+
+      const withdrawInstruction = StakeProgram.withdraw({
+        stakePubkey: new PublicKey(stakePubkey),
+        authorizedPubkey: publicKey,
+        toPubkey: publicKey,
+        lamports: stakeAccount.lamports, // Withdraw entire balance
+      });
+
+      transaction.add(withdrawInstruction);
+      
+      const latestBlockhash = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = latestBlockhash.blockhash;
+      transaction.feePayer = publicKey;
+
+      const signedTx = await signTransaction(transaction);
+      const signature = await connection.sendRawTransaction(signedTx.serialize());
+      
+      toast.success(
+        <div>
+          Withdrawal initiated! View on{" "}
+          <a
+            href={getSolscanLink(signature)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-blue-500"
+          >
+            Solscan
+          </a>
+        </div>,
+        {
+          duration: 10000,
+        }
+      );
+
+      // Refresh stake accounts after withdrawal
+      await fetchStakeAccounts();
+    } catch (error) {
+      console.error("Error withdrawing stake:", error);
+      toast.error("Failed to withdraw. Please try again.");
+    } finally {
+      setWithdrawingAccount(null);
+    }
+  }, [publicKey, connection, signTransaction]);
+
   const renderStakeAccounts = () => {
     if (!activeStakes.length) {
       return (
@@ -239,46 +316,88 @@ export default function StakingInterface() {
       );
     }
 
-    return activeStakes.map((stake) => (
-      <div
-        key={stake.pubkey}
-        className="bg-gray-800 p-4 rounded-lg mb-4 flex justify-between items-center"
-      >
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Validator:</span>
-            <span className="text-sm text-gray-300">{stake.validatorName}</span>
+    return activeStakes.map((stake) => {
+      let actionButton = null;
+      let remainingTime = "";
+
+      if (stake.state === "delegated") {
+        actionButton = (
+          <button
+            className="px-4 py-2 rounded bg-red-500 hover:bg-red-600"
+            onClick={() => handleUnstake(stake.pubkey)}
+            disabled={unstakingAccount === stake.pubkey}
+          >
+            {unstakingAccount === stake.pubkey ? "Unstaking..." : "Unstake"}
+          </button>
+        );
+      } else if (stake.state === "deactivating") {
+        const remainingEpochs = Math.max(0, stake.deactivation - stake.currentEpoch);
+        const estimatedDays = remainingEpochs * 2.5;
+        remainingTime = `~${Math.ceil(estimatedDays)} days remaining`;
+        
+        actionButton = (
+          <div className="px-4 py-2 rounded bg-yellow-600 text-sm text-center">
+            Deactivating
+            <div className="text-xs mt-1">{remainingTime}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Amount:</span>
-            <span className="text-sm text-gray-300">
-              {(stake.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Status:</span>
-            <span className="text-sm text-gray-300">{stake.state}</span>
-          </div>
-        </div>
-        <button
-          className={`px-4 py-2 rounded ${
-            stake.state === "delegated"
-              ? "bg-red-500 hover:bg-red-600"
-              : "bg-gray-600 cursor-not-allowed"
-          }`}
-          onClick={() => handleUnstake(stake.pubkey)}
-          disabled={stake.state !== "delegated" || unstakingAccount === stake.pubkey}
+        );
+      } else if (stake.state === "inactive") {
+        actionButton = (
+          <button
+            className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 text-sm"
+            onClick={() => handleWithdraw(stake.pubkey)}
+            disabled={withdrawingAccount === stake.pubkey}
+          >
+            {withdrawingAccount === stake.pubkey ? (
+              "Withdrawing..."
+            ) : (
+              "Withdraw Stake"
+            )}
+          </button>
+        );
+      } else {
+        actionButton = (
+          <button
+            className="px-4 py-2 rounded bg-gray-600 cursor-not-allowed"
+            disabled
+          >
+            Unavailable
+          </button>
+        );
+      }
+
+      return (
+        <div
+          key={stake.pubkey}
+          className="bg-gray-800 p-4 rounded-lg mb-4 flex justify-between items-center"
         >
-          {unstakingAccount === stake.pubkey ? (
-            "Unstaking..."
-          ) : stake.state === "delegated" ? (
-            "Unstake"
-          ) : (
-            "Unavailable"
-          )}
-        </button>
-      </div>
-    ));
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Validator:</span>
+              <span className="text-sm text-gray-300">{stake.validatorName}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Amount:</span>
+              <span className="text-sm text-gray-300">
+                {(stake.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Status:</span>
+              <span className={`text-sm ${
+                stake.state === "delegated" ? "text-green-400" :
+                stake.state === "deactivating" ? "text-yellow-400" :
+                stake.state === "inactive" ? "text-blue-400" :
+                "text-gray-300"
+              }`}>
+                {stake.state}
+              </span>
+            </div>
+          </div>
+          {actionButton}
+        </div>
+      );
+    });
   };
 
   const handleStake = useCallback(async () => {
