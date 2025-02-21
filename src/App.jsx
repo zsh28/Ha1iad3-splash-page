@@ -4,6 +4,7 @@ import Heading from "./components/heading";
 import Body from "./components/body";
 import StakingInterface from "./components/StakingInterface";
 import SolanaProvider from "./components/solana-provider";
+import SignIn from "./components/SignIn";
 
 export default function App() {
   return (

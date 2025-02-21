@@ -7,13 +7,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
-      nodePolyfills({
-        protocolImports: true,
-      }),
+      nodePolyfills(),
     ],
     define: {
       'process.env.VITE_HELIUS_RPC': JSON.stringify(env.VITE_HELIUS_RPC),
       'process.env.VITE_PUBLIC_PARA_API_KEY': JSON.stringify(env.VITE_PUBLIC_PARA_API_KEY),
+      "process.browser": true
     },
   };
 });
