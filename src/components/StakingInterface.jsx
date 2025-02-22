@@ -782,7 +782,7 @@ export default function StakingInterface() {
             ) : balance < (stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE) ? (
               <>
                 <div>Minimum stake amount is {MIN_STAKE} SOL</div>
-                <div>Minimum balance needed to stake is {stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE} SOL</div>
+                {/* <div>Minimum balance needed to stake is {stakingFees.rentExemption + stakingFees.txFee + MIN_STAKE} SOL</div> */}
               </>
             ) : parseFloat(amount) < MIN_STAKE ? (
               <div>Minimum stake amount is {MIN_STAKE} SOL</div>
