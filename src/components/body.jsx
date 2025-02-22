@@ -32,7 +32,7 @@ export default function Body() {
             </svg>
           </span>
           <span className="font-satoshi text-[16px] md:text-[22px] font-light">
-            Execute critical research
+            Help us execute critical research
           </span>
         </li>
         <li className="flex items-start justify-center">
@@ -53,7 +53,7 @@ export default function Body() {
             </svg>
           </span>
           <span className="font-satoshi text-[16px] md:text-[22px] font-light">
-            Pioneer new validator technology
+            Help us pioneer new validator technology
           </span>
         </li>
         <li className="flex items-start justify-center">
@@ -74,7 +74,7 @@ export default function Body() {
             </svg>
           </span>
           <span className="font-satoshi text-[16px] md:text-[22px] font-light">
-            Continue to offer the best technical education in web3
+            Help us continue to offer the best technical education in web3
           </span>
         </li>
       </ul>
