@@ -1,6 +1,6 @@
 # Ha1iad3 Splash Page
 
-Welcome to the **Ha1iad3 Splash Page** repository! This project is a modern and lightweight splash page built using **React**, **Vite** and **Tailwind CSS**.
+Native Stake SOL to Turbin3's validator. Manage your native stakes. Liquid staking derivatives coming soon.
 
 ## Installation
 
