@@ -1,6 +1,6 @@
 # Ha1iad3 Splash Page
 
-Native Stake SOL to Turbin3's validator. Manage your native stakes. Liquid staking derivatives coming soon.
+Native Stake SOL to [Turbin3's](https://turbin3.com/) validator. Manage your native stakes. Liquid staking derivatives coming soon.
 
 ## Installation
 
