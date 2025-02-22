@@ -16,6 +16,7 @@ import {
   TESTNET_VALIDATOR_VOTE,
 } from "../constants/validators";
 import { toast } from "react-hot-toast";
+import StakeCalendarButton from './StakeCalendarButton';
 
 const MIN_STAKE = 0.001; // SOL
 
@@ -221,13 +222,26 @@ export default function StakingInterface() {
         // Determine the actual state based on delegation and epochs
         let actualState = stakeState;
         if (stakeState === "delegated" && delegation) {
-          if (delegation.deactivationEpoch !== "18446744073709551615") {
-            if (epochInfo.epoch >= delegation.deactivationEpoch) {
+          console.log('Stake Debug:', {
+            stakeState,
+            activationEpoch: delegation?.activationEpoch,
+            currentEpoch: epochInfo.epoch,
+            deactivationEpoch: delegation?.deactivationEpoch
+          });
+
+          // First check if it's still activating
+          if (epochInfo.epoch <= parseInt(delegation.activationEpoch)) {
+            actualState = "activating";
+          }
+          // Then check if it's deactivating or inactive
+          else if (delegation.deactivationEpoch !== "18446744073709551615") {
+            if (epochInfo.epoch >= parseInt(delegation.deactivationEpoch)) {
               actualState = "inactive";
             } else {
               actualState = "deactivating";
             }
           }
+          // Otherwise it's fully delegated (active in the next epoch after activation)
         }
 
         return {
@@ -419,15 +433,46 @@ export default function StakingInterface() {
             {unstakingAccount === stake.pubkey ? "Unstaking..." : "Unstake"}
           </button>
         );
+      } else if (stake.state === "activating") {
+        const activationEpoch = parseInt(stake.activation);
+        const currentEpoch = stake.currentEpoch;
+        const epochsUntilActive = activationEpoch - currentEpoch + 1;
+        const estimatedDays = epochsUntilActive * 2.5;
+        const remainingTime = `~${Math.ceil(estimatedDays)} days`;
+        
+        actionButton = (
+          <div className="px-4 py-2 rounded bg-emerald-500 text-sm">
+            <div>Activating Delegation...</div>
+            <div className="text-xs mt-1">
+              Current Epoch: {currentEpoch}
+            </div>
+            <div className="text-xs">
+              Active in Epoch: {activationEpoch + 1}
+            </div>
+            <div className="text-xs font-medium mt-1">
+              Estimated time until active: {remainingTime}
+            </div>
+            {/* <button
+            className="px-4 py-2 rounded bg-red-500 hover:bg-red-600 margin-top: 10px"
+            onClick={() => handleUnstake(stake.pubkey)}
+            disabled={unstakingAccount === stake.pubkey}
+          >
+            {unstakingAccount === stake.pubkey ? "Unstaking..." : "Unstake"}
+          </button> */}
+          </div>
+        );
       } else if (stake.state === "deactivating") {
         const remainingEpochs = Math.max(0, stake.deactivation - stake.currentEpoch);
         const estimatedDays = remainingEpochs * 2.5;
         remainingTime = `~${Math.ceil(estimatedDays)} days remaining`;
         
         actionButton = (
-          <div className="px-4 py-2 rounded bg-yellow-600 text-sm text-center">
-            Deactivating
-            <div className="text-xs mt-1">{remainingTime}</div>
+          <div className="flex items-center">
+            <div className="px-4 py-2 rounded bg-yellow-600 text-sm text-center">
+              Deactivating
+              <div className="text-xs mt-1">{remainingTime}</div>
+            </div>
+            <StakeCalendarButton stake={stake} estimatedDays={Math.ceil(estimatedDays)} />
           </div>
         );
       } else if (stake.state === "inactive") {
@@ -475,11 +520,16 @@ export default function StakingInterface() {
               <span className="text-sm font-medium">Status:</span>
               <span className={`text-sm ${
                 stake.state === "delegated" ? "text-green-400" :
-                stake.state === "deactivating" ? "text-yellow-400" :
+                stake.state === "activating" ? "text-emerald-400" :
+                stake.state === "deactivating" ? "text-orange-400" :
                 stake.state === "inactive" ? "text-blue-400" :
                 "text-gray-300"
               }`}>
-                {stake.state}
+                {stake.state === "activating" ? "Activating Delegation..." :
+                 stake.state === "delegated" ? "Active" :
+                 stake.state === "deactivating" ? "Deactivating..." :
+                 stake.state === "inactive" ? "Ready to Withdraw" :
+                 stake.state}
               </span>
             </div>
           </div>
